@@ -5,15 +5,15 @@ on:
   workflow_dispatch:
     inputs:
       bootloader:
-        description: "Select Bootloader"
+        description: "Select Bootloader / STB"
         required: true
-        default: "b860h"
+        default: "hg680p"
         type: choice
         options:
-          - b860h
           - hg680p
+          - b860h
       fw_link:
-        description: "Insert Firmware Link"
+        description: "Insert Firmware Link (OpenWrt / Armbian)"
         required: true
         default: ""
 
@@ -23,14 +23,14 @@ jobs:
 
     steps:
     - name: Checkout Repository
-      uses: actions/checkout@main
+      uses: actions/checkout@v4
 
     - name: SetUp environment
       run: |
         PWD=$(pwd)
         sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc > /dev/null 2>&1
         sudo -E apt-get -qq update > /dev/null 2>&1
-        sudo -E apt-get -y install wget python3 > /dev/null 2>&1
+        sudo -E apt-get -y install wget python3 p7zip-full unzip > /dev/null 2>&1
         sudo -E apt-get -qq autoremove --purge > /dev/null 2>&1
         sudo -E apt-get -qq clean > /dev/null 2>&1
         sudo pip3 install gdown > /dev/null 2>&1
@@ -40,90 +40,166 @@ jobs:
 
     - name: Download Firmware
       run: |
-        if [ $(echo ${{ github.event.inputs.fw_link }} | grep "drive.") ]; then
-          if [ $(echo ${{ github.event.inputs.fw_link }} | awk -F "/" '{print $6}') ]; then
-            link_gdrive=$(echo ${{ github.event.inputs.fw_link }} | awk -F "/" '{print $6}')
+        FW_LINK="${{ github.event.inputs.fw_link }}"
+        if echo "$FW_LINK" | grep -q "drive."; then
+          if echo "$FW_LINK" | awk -F "/" '{print $6}' | grep -q "^[a-zA-Z0-9_-]*$"; then
+            link_gdrive=$(echo "$FW_LINK" | awk -F "/" '{print $6}')
           else
-            link_gdrive=$(echo ${{ github.event.inputs.fw_link }} | awk -F "/" '{print $4}' | awk -F "?id=" '{print $2}'|awk -F "&export" '{print $1}')
+            link_gdrive=$(echo "$FW_LINK" | awk -F "/" '{print $4}' | awk -F "?id=" '{print $2}' | awk -F "&export" '{print $1}')
           fi
-          sudo gdown ${link_gdrive} -O openwrt/$(echo "${{ github.event.inputs.fw_link }}" | awk -F/ '{print $NF}') >/dev/null
+          sudo gdown "${link_gdrive}" -O "openwrt/$(echo "$FW_LINK" | awk -F/ '{print $NF}')" >/dev/null
+        elif echo "$FW_LINK" | grep -q "mediafire.com"; then
+          sudo mediafire-dl "$FW_LINK" -o "openwrt/$(echo "$FW_LINK" | awk -F/ '{print $NF}')" >/dev/null
+        elif echo "$FW_LINK" | grep -q "mega.nz"; then
+          file_mega=$(sudo mega-get "$FW_LINK" | awk -F: '{print $2}' | xargs)
+          sudo mv "${file_mega}" "openwrt/$(echo "$FW_LINK" | awk -F/ '{print $NF}')"
         else
-          if [ $(echo ${{ github.event.inputs.fw_link }} | grep "mediafire.com") ]; then
-            sudo mediafire-dl ${{ github.event.inputs.fw_link }} -o openwrt/$(echo "${{ github.event.inputs.fw_link }}" | awk -F/ '{print $NF}') >/dev/null
-          else
-            if [ $(echo ${{ github.event.inputs.fw_link }} | grep "mega.nz") ]; then
-              file_mega=$(sudo mega-get ${{ github.event.inputs.fw_link }} | awk -F: '{print $2}')
-              sudo mv ${file_mega} openwrt/$(echo "${{ github.event.inputs.fw_link }}" | awk -F/ '{print $NF}')
-            else
-              sudo wget --no-check-certificate ${{ github.event.inputs.fw_link }} -O openwrt/$(echo "${{ github.event.inputs.fw_link }}" | awk -F/ '{print $NF}') >/dev/null
-            fi
+          sudo wget --no-check-certificate "$FW_LINK" -O "openwrt/$(echo "$FW_LINK" | awk -F/ '{print $NF}')" >/dev/null
+        fi
+
+    - name: Decompress Firmware
+      id: decompress
+      run: |
+        cd openwrt
+        RAW_FILE=$(find . -maxdepth 1 -type f \( -name "*.img*" -o -name "*.7z" -o -name "*.zip" \) | head -n 1)
+        
+        if [ -z "$RAW_FILE" ]; then
+          echo "Error: File firmware tidak ditemukan!"
+          exit 1
+        fi
+
+        echo "Menditeksi file: $RAW_FILE"
+        
+        if [[ "$RAW_FILE" == *.img.gz ]]; then
+          sudo gunzip -f "$RAW_FILE"
+          IMG_FILE="${RAW_FILE%.gz}"
+          COMPRESSION="gz"
+        elif [[ "$RAW_FILE" == *.img.xz ]]; then
+          sudo unxz -f "$RAW_FILE"
+          IMG_FILE="${RAW_FILE%.xz}"
+          COMPRESSION="xz"
+        elif [[ "$RAW_FILE" == *.7z ]]; then
+          sudo 7z x "$RAW_FILE"
+          sudo rm -f "$RAW_FILE"
+          IMG_FILE=$(find . -maxdepth 1 -type f -name "*.img" | head -n 1)
+          COMPRESSION="xz"
+        elif [[ "$RAW_FILE" == *.zip ]]; then
+          sudo unzip "$RAW_FILE"
+          sudo rm -f "$RAW_FILE"
+          IMG_FILE=$(find . -maxdepth 1 -type f -name "*.img" | head -n 1)
+          COMPRESSION="xz"
+        elif [[ "$RAW_FILE" == *.img ]]; then
+          IMG_FILE="$RAW_FILE"
+          COMPRESSION="xz"
+        else
+          echo "Format file tidak dikenali"
+          exit 1
+        fi
+
+        IMG_NAME=$(basename "$IMG_FILE")
+        echo "IMG_NAME=$IMG_NAME" >> $GITHUB_ENV
+        echo "COMPRESSION=$COMPRESSION" >> $GITHUB_ENV
+
+    - name: Extract & Mod SDCard Firmware
+      run: |
+        sudo mkdir -p openwrt/boot
+        sudo mv BootCardMaker/u-boot.bin openwrt/ 2>/dev/null || true
+        sudo mv files/mod-boot-sdcard.tar.gz openwrt/ 2>/dev/null || true
+        
+        cd openwrt
+        
+        # Setup Loop Device
+        device=$(sudo losetup -fP --show "${{ env.IMG_NAME }}")
+        sudo partprobe ${device} 2>/dev/null || true
+        sleep 2
+        
+        # Mount Partisi Boot (p1)
+        sudo mount ${device}p1 boot
+        
+        # Ekstrak berkas mod jika ada
+        if [ -f mod-boot-sdcard.tar.gz ]; then
+          sudo tar -xzvf mod-boot-sdcard.tar.gz -C boot/ || true
+        fi
+        
+        # Tentukan DTB berdasarkan pilihan Bootloader
+        if [ "${{ github.event.inputs.bootloader }}" = "b860h" ]; then
+          dtb="meson-gxl-s905x-b860h.dtb"
+        else
+          dtb="meson-gxl-s905x-p212.dtb"
+        fi
+
+        # Modifikasi UUID / Kebutuhan OpenWrt
+        if [ -f boot/uEnv.txt ] && [ -f boot/extlinux/extlinux.conf ]; then
+          uenv=$(sudo cat boot/uEnv.txt | grep APPEND | awk -F "root=" '{print $2}')
+          extlinux=$(sudo cat boot/extlinux/extlinux.conf | grep append | awk -F "root=" '{print $2}')
+          if [ -n "$uenv" ] && [ -n "$extlinux" ]; then
+            sudo sed -i "s/$extlinux/$uenv/g" boot/extlinux/extlinux.conf
           fi
         fi
 
-    - name: Get extension
-      id: get_extension
-      run: |
-        filename=$(find ./openwrt -name "*.img.*")
-        extension=$(basename "$filename" | sed -E 's/.*\.(img\.(gz|xz))$/\1/')
-        no_extension=$(basename "$filename" | sed -E 's/\.(gz|xz)$//')
-        echo "file_type=$extension" >> $GITHUB_ENV
-        echo "file_name=$no_extension" >> $GITHUB_ENV
+        # Update DTB di boot.ini (jika ada)
+        if [ -f boot/boot.ini ]; then
+          boot=$(sudo cat boot/boot.ini | grep -i dtb | awk -F "/" '{print $4}' | cut -d'"' -f1)
+          if [ -n "$boot" ]; then
+            sudo sed -i "s/$boot/$dtb/g" boot/boot.ini
+          fi
+        fi
+
+        # Update DTB di extlinux.conf (jika ada)
+        if [ -f boot/extlinux/extlinux.conf ]; then
+          sudo sed -i -E "s/meson-.*\.dtb/$dtb/g" boot/extlinux/extlinux.conf 2>/dev/null || true
+        fi
+
+        # Update DTB di uEnv.txt (OpenWrt)
+        if [ -f boot/uEnv.txt ]; then
+          sudo sed -i -E "s/meson-.*\.dtb/$dtb/g" boot/uEnv.txt 2>/dev/null || true
+        fi
+
+        # Update DTB di armbianEnv.txt (Armbian)
+        if [ -f boot/armbianEnv.txt ]; then
+          if grep -q "fdtfile" boot/armbianEnv.txt; then
+            sudo sed -i -E "s|fdtfile=.*|fdtfile=amlogic/$dtb|g" boot/armbianEnv.txt
+          else
+            echo "fdtfile=amlogic/$dtb" | sudo tee -a boot/armbianEnv.txt
+          fi
+        fi
+
+        # Unmount
+        sudo umount boot
+        sleep 1
         
-    - name: Extract firmware
-      run: |
-        sudo mkdir -p openwrt/boot
-        sudo mv BootCardMaker/u-boot.bin openwrt/
-        sudo mv files/mod-boot-sdcard.tar.gz openwrt/
-        cd openwrt
-        if [ ${{ env.file_type }} = "img.gz" ]; then
-          sudo gunzip ${{ env.file_name }}.gz
-        else
-          sudo unxz ${{ env.file_name }}.xz
+        # Inject u-boot ke MBR/Bootcard area untuk SDCard Boot
+        if [ -f u-boot.bin ]; then
+          sudo dd if=u-boot.bin of=${device} bs=1 count=444 conv=fsync 2>/dev/null
+          sudo dd if=u-boot.bin of=${device} bs=512 skip=1 seek=1 conv=fsync 2>/dev/null
         fi
-        device=$(sudo losetup -fP --show ${{ env.file_name }})
-        sudo mount ${device}p1 boot
-        sudo tar -xzvf mod-boot-sdcard.tar.gz -C boot
-        uenv=$(sudo cat boot/uEnv.txt | grep APPEND | awk -F "root=" '{print $2}')
-        extlinux=$(sudo cat boot/extlinux/extlinux.conf | grep append | awk -F "root=" '{print $2}')
-        sudo sed -i "s/$extlinux/$uenv/g" boot/extlinux/extlinux.conf
-        sleep 1
-        if [ ${{ github.event.inputs.bootloader }} = "b860h" ]; then
-          dtb="meson-gxl-s905x-b860h.dtb"
-        elif [ ${{ github.event.inputs.bootloader }} = "hg680p" ]; then
-          dtb="meson-gxl-s905x-p212.dtb"
-        fi
-        boot=$(sudo cat boot/boot.ini | grep dtb | awk -F "/" '{print $4}' | cut -d'"' -f1)
-        sudo sed -i "s/$boot/$dtb/g" boot/boot.ini
-        sudo sed -i "s/$boot/$dtb/g" boot/extlinux/extlinux.conf
-        sudo sed -i "s/$boot/$dtb/g" boot/uEnv.txt
-        sudo umount ${device}p1
-        sleep 1
-        sudo dd if=u-boot.bin of=${device} bs=1 count=444 conv=fsync 2>/dev/null
-        sudo dd if=u-boot.bin of=${device} bs=512 skip=1 seek=1 conv=fsync 2>/dev/null
+
         sudo losetup -d ${device}
         sleep 1
-        if [ ${{ env.file_type }} = "img.gz" ]; then
-          sudo gzip ${{ env.file_name }}
+        
+        # Kompres kembali firmware
+        if [ "${{ env.COMPRESSION }}" = "gz" ]; then
+          sudo gzip "${{ env.IMG_NAME }}"
         else
-          sudo xz ${{ env.file_name }}
+          sudo xz -z -4 "${{ env.IMG_NAME }}"
         fi
 
     - name: Find Firmware
       run: |
-        FILE_PATH=$(find -name "*.img.*")
+        FILE_PATH=$(find ./openwrt -type f \( -name "*.img.xz" -o -name "*.img.gz" -o -name "*.img" \))
         echo "FILE_PATH=$FILE_PATH" >> $GITHUB_ENV
-        echo -e "FILE_PATH path: $FILE_PATH"
+        echo "FILE_PATH path: $FILE_PATH"
 
     - name: Create Release
       uses: softprops/action-gh-release@v2
       env:
         GITHUB_TOKEN: ${{ secrets.TOKEN_GITHUB }}
       with:
-        name: Mutiara-Wrt_Mod_SDCard
+        name: Firmware_Mod_SDCard
         tag_name: All
         draft: false
         prerelease: false
         files: |
-              ${{ env.FILE_PATH }}
+          ${{ env.FILE_PATH }}
         body: |
-              Mod SDCard
+          Mod SDCard Firmware (Support Armbian & OpenWrt)
