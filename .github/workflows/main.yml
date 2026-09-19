@@ -128,6 +128,12 @@ jobs:
         if [ -f mod-boot-sdcard.tar.gz ]; then
           sudo tar -xzvf mod-boot-sdcard.tar.gz -C boot/ || true
         fi
+
+        # OTOMATIS SESUAIKAN NAMA KERNEL (Armbian vs OpenWrt)
+        if [ -f boot/Image ] && [ -f boot/extlinux/extlinux.conf ]; then
+          echo "Kernel Armbian (/Image) terdeteksi, menyesuaikan extlinux.conf..."
+          sudo sed -i 's|/zImage|/Image|g' boot/extlinux/extlinux.conf 2>/dev/null || true
+        fi
         
         # Tentukan DTB berdasarkan pilihan Bootloader
         if [ "${{ github.event.inputs.bootloader }}" = "b860h" ]; then
