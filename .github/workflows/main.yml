@@ -17,6 +17,9 @@ on:
         required: true
         default: ""
 
+permissions:
+  contents: write
+
 jobs:
   setup:
     runs-on: ubuntu-22.04
@@ -41,8 +44,6 @@ jobs:
     - name: Download Firmware
       run: |
         FW_LINK="${{ github.event.inputs.fw_link }}"
-        
-        # Pindah ke folder openwrt agar hasil unduhan langsung masuk ke sana
         cd openwrt
         echo "Mengunduh dari: $FW_LINK"
         
@@ -54,12 +55,10 @@ jobs:
           fi
           sudo gdown "${link_gdrive}"
         elif echo "$FW_LINK" | grep -q "mediafire.com"; then
-          # mediafire-dl otomatis mendeteksi nama asli file dari server
           sudo mediafire-dl "$FW_LINK"
         elif echo "$FW_LINK" | grep -q "mega.nz"; then
           sudo mega-get "$FW_LINK"
         else
-          # wget mendeteksi nama file asli dari header server (--content-disposition)
           sudo wget --content-disposition --show-progress --no-check-certificate "$FW_LINK"
         fi
         
@@ -202,7 +201,7 @@ jobs:
     - name: Create Release
       uses: softprops/action-gh-release@v2
       env:
-        GITHUB_TOKEN: ${{ secrets.TOKEN_GITHUB }}
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         name: Firmware_Mod_SDCard
         tag_name: All
