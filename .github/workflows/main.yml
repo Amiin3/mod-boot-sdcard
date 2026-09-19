@@ -47,14 +47,14 @@ jobs:
           else
             link_gdrive=$(echo "$FW_LINK" | awk -F "/" '{print $4}' | awk -F "?id=" '{print $2}' | awk -F "&export" '{print $1}')
           fi
-          sudo gdown "${link_gdrive}" -O "openwrt/$(echo "$FW_LINK" | awk -F/ '{print $NF}')" >/dev/null
-        elif echo "$FW_LINK" | grep -q "mediafire.com"; then
-          sudo mediafire-dl "$FW_LINK" -o "openwrt/$(echo "$FW_LINK" | awk -F/ '{print $NF}')" >/dev/null
+          sudo gdown "${link_gdrive}" -O "openwrt/$(echo "$FW_LINK" | awk -F/ '{print $NF}' | cut -d? -f1)" >/dev/null
+        elif echo "$FW_LINK" | grep -q "mediafire.com/file"; then
+          sudo mediafire-dl "$FW_LINK" -o "openwrt/$(echo "$FW_LINK" | awk -F/ '{print $NF}' | cut -d? -f1)" >/dev/null
         elif echo "$FW_LINK" | grep -q "mega.nz"; then
           file_mega=$(sudo mega-get "$FW_LINK" | awk -F: '{print $2}' | xargs)
-          sudo mv "${file_mega}" "openwrt/$(echo "$FW_LINK" | awk -F/ '{print $NF}')"
+          sudo mv "${file_mega}" "openwrt/$(echo "$FW_LINK" | awk -F/ '{print $NF}' | cut -d? -f1)"
         else
-          sudo wget --no-check-certificate "$FW_LINK" -O "openwrt/$(echo "$FW_LINK" | awk -F/ '{print $NF}')" >/dev/null
+          sudo wget --show-progress --no-check-certificate "$FW_LINK" -O "openwrt/$(echo "$FW_LINK" | awk -F/ '{print $NF}' | cut -d? -f1)"
         fi
 
     - name: Decompress Firmware
