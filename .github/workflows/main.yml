@@ -41,21 +41,30 @@ jobs:
     - name: Download Firmware
       run: |
         FW_LINK="${{ github.event.inputs.fw_link }}"
+        
+        # Pindah ke folder openwrt agar hasil unduhan langsung masuk ke sana
+        cd openwrt
+        echo "Mengunduh dari: $FW_LINK"
+        
         if echo "$FW_LINK" | grep -q "drive."; then
           if echo "$FW_LINK" | awk -F "/" '{print $6}' | grep -q "^[a-zA-Z0-9_-]*$"; then
             link_gdrive=$(echo "$FW_LINK" | awk -F "/" '{print $6}')
           else
             link_gdrive=$(echo "$FW_LINK" | awk -F "/" '{print $4}' | awk -F "?id=" '{print $2}' | awk -F "&export" '{print $1}')
           fi
-          sudo gdown "${link_gdrive}" -O "openwrt/$(echo "$FW_LINK" | awk -F/ '{print $NF}' | cut -d? -f1)" >/dev/null
-        elif echo "$FW_LINK" | grep -q "mediafire.com/file"; then
-          sudo mediafire-dl "$FW_LINK" -o "openwrt/$(echo "$FW_LINK" | awk -F/ '{print $NF}' | cut -d? -f1)" >/dev/null
+          sudo gdown "${link_gdrive}"
+        elif echo "$FW_LINK" | grep -q "mediafire.com"; then
+          # mediafire-dl otomatis mendeteksi nama asli file dari server
+          sudo mediafire-dl "$FW_LINK"
         elif echo "$FW_LINK" | grep -q "mega.nz"; then
-          file_mega=$(sudo mega-get "$FW_LINK" | awk -F: '{print $2}' | xargs)
-          sudo mv "${file_mega}" "openwrt/$(echo "$FW_LINK" | awk -F/ '{print $NF}' | cut -d? -f1)"
+          sudo mega-get "$FW_LINK"
         else
-          sudo wget --show-progress --no-check-certificate "$FW_LINK" -O "openwrt/$(echo "$FW_LINK" | awk -F/ '{print $NF}' | cut -d? -f1)"
+          # wget mendeteksi nama file asli dari header server (--content-disposition)
+          sudo wget --content-disposition --show-progress --no-check-certificate "$FW_LINK"
         fi
+        
+        echo "--- Cek file yang berhasil diunduh ---"
+        ls -lh
 
     - name: Decompress Firmware
       id: decompress
