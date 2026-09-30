@@ -1,76 +1,7 @@
-name: Mod SDcard
-
-on:
-  repository_dispatch:
-  workflow_dispatch:
-    inputs:
-      bootloader:
-        description: "Select Bootloader / STB"
-        required: true
-        default: "hg680p"
-        type: choice
-        options:
-          - hg680p
-          - b860h
-      fw_link:
-        description: "Insert Firmware Link (OpenWrt / Armbian / Android TV)"
-        required: true
-        default: ""
-
-permissions:
-  contents: write
-
-jobs:
-  setup:
-    runs-on: ubuntu-22.04
-
-    steps:
-    - name: Checkout Repository
-      uses: actions/checkout@v4
-
-    - name: SetUp environment
-      run: |
-        PWD=$(pwd)
-        sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc > /dev/null 2>&1
-        sudo -E apt-get -qq update > /dev/null 2>&1
-        # Menambahkan 'unrar' ke daftar instalasi
-        sudo -E apt-get -y install wget python3 p7zip-full unzip unrar > /dev/null 2>&1
-        sudo -E apt-get -qq autoremove --purge > /dev/null 2>&1
-        sudo -E apt-get -qq clean > /dev/null 2>&1
-        sudo pip3 install gdown > /dev/null 2>&1
-        sudo pip3 install git+https://github.com/Juvenal-Yescas/mediafire-dl > /dev/null 2>&1
-        wget https://mega.nz/linux/repo/xUbuntu_22.04/amd64/megacmd-xUbuntu_22.04_amd64.deb && sudo apt install "$PWD/megacmd-xUbuntu_22.04_amd64.deb" > /dev/null 2>&1
-        sudo mkdir -p openwrt > /dev/null 2>&1
-
-    - name: Download Firmware
-      run: |
-        FW_LINK="${{ github.event.inputs.fw_link }}"
-        cd openwrt
-        echo "Mengunduh dari: $FW_LINK"
-        
-        if echo "$FW_LINK" | grep -q "drive."; then
-          if echo "$FW_LINK" | awk -F "/" '{print $6}' | grep -q "^[a-zA-Z0-9_-]*$"; then
-            link_gdrive=$(echo "$FW_LINK" | awk -F "/" '{print $6}')
-          else
-            link_gdrive=$(echo "$FW_LINK" | awk -F "/" '{print $4}' | awk -F "?id=" '{print $2}' | awk -F "&export" '{print $1}')
-          fi
-          sudo gdown "${link_gdrive}"
-        elif echo "$FW_LINK" | grep -q "mediafire.com"; then
-          sudo mediafire-dl "$FW_LINK"
-        elif echo "$FW_LINK" | grep -q "mega.nz"; then
-          sudo mega-get "$FW_LINK"
-        else
-          sudo wget --content-disposition --show-progress --no-check-certificate "$FW_LINK"
-        fi
-        
-        echo "--- Cek file yang berhasil diunduh ---"
-        ls -lh
-
-    - name: Decompress Firmware
+- name: Decompress Firmware
       id: decompress
       run: |
         cd openwrt
-        # Menambahkan dukungan format *.rar pada pencarian file
         RAW_FILE=$(find . -maxdepth 1 -type f \( -name "*.img*" -o -name "*.7z" -o -name "*.zip" -o -name "*.rar" \) | head -n 1)
         
         if [ -z "$RAW_FILE" ]; then
@@ -78,155 +9,46 @@ jobs:
           exit 1
         fi
 
-        echo "Menditeksi file: $RAW_FILE"
+        echo "Mendeteksi file: $RAW_FILE"
         
-        if [[ "$RAW_FILE" == *.img.gz ]]; then
-          sudo gunzip -f "$RAW_FILE"
-          IMG_FILE="${RAW_FILE%.gz}"
-          COMPRESSION="gz"
-        elif [[ "$RAW_FILE" == *.img.xz ]]; then
-          sudo unxz -f "$RAW_FILE"
-          IMG_FILE="${RAW_FILE%.xz}"
-          COMPRESSION="xz"
-        elif [[ "$RAW_FILE" == *.7z ]]; then
+        # Ekstrak jika formatnya arsip
+        if [[ "$RAW_FILE" == *.7z ]]; then
           sudo 7z x "$RAW_FILE"
           sudo rm -f "$RAW_FILE"
-          IMG_FILE=$(find . -maxdepth 1 -type f -name "*.img" | head -n 1)
-          COMPRESSION="xz"
         elif [[ "$RAW_FILE" == *.zip ]]; then
           sudo unzip "$RAW_FILE"
           sudo rm -f "$RAW_FILE"
-          IMG_FILE=$(find . -maxdepth 1 -type f -name "*.img" | head -n 1)
-          COMPRESSION="xz"
         elif [[ "$RAW_FILE" == *.rar ]]; then
-          # Logika untuk mengekstrak file .rar
           sudo unrar x -y "$RAW_FILE"
           sudo rm -f "$RAW_FILE"
-          IMG_FILE=$(find . -maxdepth 1 -type f -name "*.img" | head -n 1)
+        fi
+
+        # Cari file .img di dalam sub-folder dan pindahkan ke direktori utama
+        DEEP_IMG=$(find . -type f -name "*.img" | head -n 1)
+        if [ -n "$DEEP_IMG" ] && [ "$DEEP_IMG" != "./$(basename "$DEEP_IMG")" ]; then
+          echo "Memindahkan $DEEP_IMG ke direktori utama..."
+          sudo mv "$DEEP_IMG" ./
+        fi
+
+        # Proses file hasil ekstraksi
+        NEW_RAW=$(find . -maxdepth 1 -type f \( -name "*.img" -o -name "*.img.gz" -o -name "*.img.xz" \) | head -n 1)
+        
+        if [[ "$NEW_RAW" == *.img.gz ]]; then
+          sudo gunzip -f "$NEW_RAW"
+          IMG_FILE="${NEW_RAW%.gz}"
+          COMPRESSION="gz"
+        elif [[ "$NEW_RAW" == *.img.xz ]]; then
+          sudo unxz -f "$NEW_RAW"
+          IMG_FILE="${NEW_RAW%.xz}"
           COMPRESSION="xz"
-        elif [[ "$RAW_FILE" == *.img ]]; then
-          IMG_FILE="$RAW_FILE"
+        elif [[ "$NEW_RAW" == *.img ]]; then
+          IMG_FILE="$NEW_RAW"
           COMPRESSION="xz"
         else
-          echo "Format file tidak dikenali"
+          echo "Error: Tidak ada file .img yang ditemukan setelah ekstrak!"
           exit 1
         fi
 
         IMG_NAME=$(basename "$IMG_FILE")
         echo "IMG_NAME=$IMG_NAME" >> $GITHUB_ENV
         echo "COMPRESSION=$COMPRESSION" >> $GITHUB_ENV
-
-    - name: Extract & Mod SDCard Firmware
-      run: |
-        sudo mkdir -p openwrt/boot
-        sudo mv BootCardMaker/u-boot.bin openwrt/ 2>/dev/null || true
-        sudo mv files/mod-boot-sdcard.tar.gz openwrt/ 2>/dev/null || true
-        
-        cd openwrt
-        
-        # Setup Loop Device
-        device=$(sudo losetup -fP --show "${{ env.IMG_NAME }}")
-        sudo partprobe ${device} 2>/dev/null || true
-        sleep 2
-        
-        # Mount Partisi Boot (p1)
-        sudo mount ${device}p1 boot
-        
-        # Ekstrak berkas mod jika ada
-        if [ -f mod-boot-sdcard.tar.gz ]; then
-          sudo tar -xzvf mod-boot-sdcard.tar.gz -C boot/ || true
-        fi
-
-        # OTOMATIS SESUAIKAN NAMA KERNEL (Armbian vs OpenWrt)
-        if [ -f boot/Image ] && [ -f boot/extlinux/extlinux.conf ]; then
-          echo "Kernel Armbian (/Image) terdeteksi, menyesuaikan extlinux.conf..."
-          sudo sed -i 's|/zImage|/Image|g' boot/extlinux/extlinux.conf 2>/dev/null || true
-        fi
-        
-        # Tentukan DTB berdasarkan pilihan Bootloader
-        if [ "${{ github.event.inputs.bootloader }}" = "b860h" ]; then
-          dtb="meson-gxl-s905x-b860h.dtb"
-        else
-          dtb="meson-gxl-s905x-p212.dtb"
-        fi
-
-        # Modifikasi UUID / Kebutuhan OpenWrt
-        if [ -f boot/uEnv.txt ] && [ -f boot/extlinux/extlinux.conf ]; then
-          uenv=$(sudo cat boot/uEnv.txt | grep APPEND | awk -F "root=" '{print $2}')
-          extlinux=$(sudo cat boot/extlinux/extlinux.conf | grep append | awk -F "root=" '{print $2}')
-          if [ -n "$uenv" ] && [ -n "$extlinux" ]; then
-            sudo sed -i "s/$extlinux/$uenv/g" boot/extlinux/extlinux.conf
-          fi
-        fi
-
-        # Update DTB di boot.ini (jika ada)
-        if [ -f boot/boot.ini ]; then
-          boot=$(sudo cat boot/boot.ini | grep -i dtb | awk -F "/" '{print $4}' | cut -d'"' -f1)
-          if [ -n "$boot" ]; then
-            sudo sed -i "s/$boot/$dtb/g" boot/boot.ini
-          fi
-        fi
-
-        # Update DTB di extlinux.conf (jika ada)
-        if [ -f boot/extlinux/extlinux.conf ]; then
-          sudo sed -i -E "s/meson-.*\.dtb/$dtb/g" boot/extlinux/extlinux.conf 2>/dev/null || true
-        fi
-
-        # Update DTB di uEnv.txt (OpenWrt)
-        if [ -f boot/uEnv.txt ]; then
-          sudo sed -i -E "s/meson-.*\.dtb/$dtb/g" boot/uEnv.txt 2>/dev/null || true
-        fi
-
-        # Update DTB di armbianEnv.txt (Armbian)
-        if [ -f boot/armbianEnv.txt ]; then
-          if grep -q "fdtfile" boot/armbianEnv.txt; then
-            sudo sed -i -E "s|fdtfile=.*|fdtfile=amlogic/$dtb|g" boot/armbianEnv.txt
-          else
-            echo "fdtfile=amlogic/$dtb" | sudo tee -a boot/armbianEnv.txt
-          fi
-        fi
-
-        # Update DTB di env.txt (Android TV)
-        if [ -f boot/env.txt ]; then
-          sudo sed -i -E "s/meson-.*\.dtb/$dtb/g" boot/env.txt 2>/dev/null || true
-        fi
-
-        # Unmount
-        sudo umount boot
-        sleep 1
-        
-        # Inject u-boot ke MBR/Bootcard area untuk SDCard Boot
-        if [ -f u-boot.bin ]; then
-          sudo dd if=u-boot.bin of=${device} bs=1 count=444 conv=fsync 2>/dev/null
-          sudo dd if=u-boot.bin of=${device} bs=512 skip=1 seek=1 conv=fsync 2>/dev/null
-        fi
-
-        sudo losetup -d ${device}
-        sleep 1
-        
-        # Kompres kembali firmware
-        if [ "${{ env.COMPRESSION }}" = "gz" ]; then
-          sudo gzip "${{ env.IMG_NAME }}"
-        else
-          sudo xz -z -4 "${{ env.IMG_NAME }}"
-        fi
-
-    - name: Find Firmware
-      run: |
-        FILE_PATH=$(find ./openwrt -type f \( -name "*.img.xz" -o -name "*.img.gz" -o -name "*.img" \))
-        echo "FILE_PATH=$FILE_PATH" >> $GITHUB_ENV
-        echo "FILE_PATH path: $FILE_PATH"
-
-    - name: Create Release
-      uses: softprops/action-gh-release@v2
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        name: Firmware_Mod_SDCard
-        tag_name: All
-        draft: false
-        prerelease: false
-        files: |
-          ${{ env.FILE_PATH }}
-        body: |
-          Mod SDCard Firmware (Support Android TV, Armbian & OpenWrt)
