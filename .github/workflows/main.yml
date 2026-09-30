@@ -2,7 +2,9 @@
       id: decompress
       run: |
         cd openwrt
-        RAW_FILE=$(find . -maxdepth 1 -type f \( -name "*.img*" -o -name "*.7z" -o -name "*.zip" -o -name "*.rar" \) | head -n 1)
+        
+        # 1. Cari file arsip atau img di folder openwrt
+        RAW_FILE=$(find . -maxdepth 1 -type f \( -iname "*.img*" -o -iname "*.7z" -o -iname "*.zip" -o -iname "*.rar" \) | head -n 1)
         
         if [ -z "$RAW_FILE" ]; then
           echo "Error: File firmware tidak ditemukan!"
@@ -11,44 +13,56 @@
 
         echo "Mendeteksi file: $RAW_FILE"
         
-        # Ekstrak jika formatnya arsip
-        if [[ "$RAW_FILE" == *.7z ]]; then
-          sudo 7z x "$RAW_FILE"
+        # 2. Ekstrak file jika berformat arsip
+        if [[ "$RAW_FILE" == *.7z ]] || [[ "$RAW_FILE" == *.7Z ]]; then
+          sudo 7z x "$RAW_FILE" -y
           sudo rm -f "$RAW_FILE"
-        elif [[ "$RAW_FILE" == *.zip ]]; then
-          sudo unzip "$RAW_FILE"
+        elif [[ "$RAW_FILE" == *.zip ]] || [[ "$RAW_FILE" == *.ZIP ]]; then
+          sudo unzip -o "$RAW_FILE"
           sudo rm -f "$RAW_FILE"
-        elif [[ "$RAW_FILE" == *.rar ]]; then
+        elif [[ "$RAW_FILE" == *.rar ]] || [[ "$RAW_FILE" == *.RAR ]]; then
           sudo unrar x -y "$RAW_FILE"
           sudo rm -f "$RAW_FILE"
         fi
 
-        # Cari file .img di dalam sub-folder dan pindahkan ke direktori utama
-        DEEP_IMG=$(find . -type f -name "*.img" | head -n 1)
-        if [ -n "$DEEP_IMG" ] && [ "$DEEP_IMG" != "./$(basename "$DEEP_IMG")" ]; then
-          echo "Memindahkan $DEEP_IMG ke direktori utama..."
-          sudo mv "$DEEP_IMG" ./
+        # 3. Cari file .img di seluruh sub-folder (case-insensitive) lalu pindahkan ke direktori utama
+        DEEP_IMG=$(find . -type f -iname "*.img" | head -n 1)
+        
+        if [ -n "$DEEP_IMG" ]; then
+          echo "Ditemukan file img: $DEEP_IMG"
+          sudo mv "$DEEP_IMG" ./ 2>/dev/null || true
         fi
 
-        # Proses file hasil ekstraksi
-        NEW_RAW=$(find . -maxdepth 1 -type f \( -name "*.img" -o -name "*.img.gz" -o -name "*.img.xz" \) | head -n 1)
-        
-        if [[ "$NEW_RAW" == *.img.gz ]]; then
-          sudo gunzip -f "$NEW_RAW"
-          IMG_FILE="${NEW_RAW%.gz}"
-          COMPRESSION="gz"
-        elif [[ "$NEW_RAW" == *.img.xz ]]; then
-          sudo unxz -f "$NEW_RAW"
-          IMG_FILE="${NEW_RAW%.xz}"
-          COMPRESSION="xz"
-        elif [[ "$NEW_RAW" == *.img ]]; then
-          IMG_FILE="$NEW_RAW"
-          COMPRESSION="xz"
-        else
-          echo "Error: Tidak ada file .img yang ditemukan setelah ekstrak!"
+        # 4. Ambil file img / compressed img dari direktori utama
+        FINAL_FILE=$(find . -maxdepth 1 -type f \( -iname "*.img" -o -iname "*.img.gz" -o -iname "*.img.xz" \) | head -n 1)
+
+        if [ -z "$FINAL_FILE" ]; then
+          echo "Error: File .img tidak ditemukan setelah ekstraksi!"
+          ls -R
           exit 1
         fi
 
+        # 5. Decompress jika file masih berformat .gz / .xz
+        if [[ "$FINAL_FILE" == *.gz ]]; then
+          sudo gunzip -f "$FINAL_FILE"
+          IMG_FILE="${FINAL_FILE%.gz}"
+          COMPRESSION="gz"
+        elif [[ "$FINAL_FILE" == *.xz ]]; then
+          sudo unxz -f "$FINAL_FILE"
+          IMG_FILE="${FINAL_FILE%.xz}"
+          COMPRESSION="xz"
+        else
+          IMG_FILE="$FINAL_FILE"
+          COMPRESSION="xz"
+        fi
+
         IMG_NAME=$(basename "$IMG_FILE")
+        
+        if [ -z "$IMG_NAME" ]; then
+          echo "Error: Variable IMG_NAME kosong!"
+          exit 1
+        fi
+
         echo "IMG_NAME=$IMG_NAME" >> $GITHUB_ENV
         echo "COMPRESSION=$COMPRESSION" >> $GITHUB_ENV
+        echo "Berhasil mendeteksi IMG: $IMG_NAME"
