@@ -94,43 +94,52 @@ jobs:
         
         echo "[LOG] Memulai proses dekompresi bertingkat..."
 
-        # Loop ekstraksi bertingkat universal tanpa batas kedalaman folder
+        # Ekstraksi khusus berdasarkan jenis ekstensi
         for i in {1..5}; do
           ARCHIVE=$(find . -type f \( -iname "*.xz" -o -iname "*.gz" -o -iname "*.zip" -o -iname "*.rar" -o -iname "*.7z" -o -iname "*.tar*" -o -iname "*.tgz" -o -iname "*.bz2" -o -iname "*.zst" \) | head -n 1)
           if [ -n "$ARCHIVE" ]; then
-            echo "[LOG] Mengekstrak arsip terdeteksi: $ARCHIVE"
-            sudo 7z x "$ARCHIVE" -y > /dev/null 2>&1 || true
-            sudo rm -f "$ARCHIVE" 2>/dev/null || true
+            echo "[LOG] Mengekstrak arsip: $ARCHIVE"
+            case "$ARCHIVE" in
+              *.xz|*.XZ)
+                sudo unxz -f "$ARCHIVE" 2>/dev/null || sudo 7z x "$ARCHIVE" -y > /dev/null 2>&1 || true
+                ;;
+              *.gz|*.GZ)
+                sudo gunzip -f "$ARCHIVE" 2>/dev/null || sudo 7z x "$ARCHIVE" -y > /dev/null 2>&1 || true
+                ;;
+              *)
+                sudo 7z x "$ARCHIVE" -y > /dev/null 2>&1 || true
+                sudo rm -f "$ARCHIVE" 2>/dev/null || true
+                ;;
+            esac
           else
             break
           fi
         done
 
-        echo "[LOG] Memulai pendeteksian berkas firmware..."
+        echo "[LOG] Menyeleksi berkas firmware..."
 
-        # Prioritas 1: Cari ekstensi umum (.img, .bin, .raw)
+        # 1. Cari file berdasarkan ekstensi umum
         TARGET_FILE=$(find . -type f \( -iname "*.img" -o -iname "*.bin" -o -iname "*.raw" \) -printf "%s %p\n" | sort -nr | head -n 1 | cut -d' ' -f2-)
 
-        # Prioritas 2 (Fallback Pintar): Ambil file terbesar (>50MB) apapun ekstensinya (misal .A.Sop atau tanpa ekstensi)
+        # 2. Fallback: Jika tidak ada ekstensi standar (seperti hasil unxz tanpa .img), ambil file terbesar (>50MB)
         if [ -z "$TARGET_FILE" ]; then
-          echo "[LOG] Ekstensi standar tidak ditemukan. Memindai file terbesar (>50MB)..."
+          echo "[LOG] Ekstensi .img/.bin tidak ditemukan. Memindai berkas terbesar (>50MB)..."
           TARGET_FILE=$(find . -type f -size +50M -printf "%s %p\n" | sort -nr | head -n 1 | cut -d' ' -f2-)
         fi
 
         if [ -z "$TARGET_FILE" ]; then
-          echo "[ERROR] File firmware tidak ditemukan setelah dekompresi!"
-          echo "--- Isi direktori saat ini: ---"
+          echo "[ERROR] Tidak ditemukan berkas firmware setelah dekompresi!"
+          echo "--- Berkas yang ada di direktori saat ini: ---"
           find . -type f
           exit 1
         fi
 
-        echo "[LOG] File Firmware utama ditemukan: $TARGET_FILE"
+        echo "[LOG] Berkas Firmware utama ditemukan: $TARGET_FILE"
 
-        # Sanitisasi nama file ke firmware.img untuk menghindari masalah spasi/karakter khusus
+        # Ubah nama berkas ke firmware.img agar aman untuk proses mounting loop device
         CLEAN_NAME="firmware.img"
         sudo mv "$TARGET_FILE" "./$CLEAN_NAME"
 
-        # Simpan nama file ke environment variable
         echo "IMG_NAME=$CLEAN_NAME" >> $GITHUB_ENV
         echo "COMPRESSION=xz" >> $GITHUB_ENV
         echo "[LOG] Berhasil diset: IMG_NAME=$CLEAN_NAME"
@@ -167,7 +176,6 @@ jobs:
         # Cek partisi boot (p1)
         BOOT_PART="${device}p1"
         if [ ! -b "$BOOT_PART" ]; then
-          # Fallback menggunakan kpartx jika partprobe gagal membuat simlink partisi
           sudo kpartx -av "$device" 2>/dev/null || true
           loop_name=$(echo "$device" | cut -d'/' -f3)
           BOOT_PART="/dev/mapper/${loop_name}p1"
