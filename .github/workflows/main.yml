@@ -54,19 +54,16 @@ jobs:
         if echo "$FW_LINK" | grep -E -q "drive.google.com|drive.usercontent.google.com|docs.google.com" || [ -n "$GDRIVE_ID" ]; then
           echo "[LOG] Terdeteksi link Google Drive..."
           
-          # 1. Coba unduh menggunakan File ID jika ID terdeteksi
           if [ -n "$GDRIVE_ID" ]; then
             echo "[LOG] Mengunduh via Google Drive File ID: $GDRIVE_ID"
             sudo gdown --id "$GDRIVE_ID" || true
           fi
           
-          # 2. Coba gdown --fuzzy jika folder masih kosong
           if [ $(find . -type f | wc -l) -eq 0 ]; then
             echo "[LOG] Mengunduh via gdown --fuzzy..."
             sudo gdown --fuzzy "$FW_LINK" || true
           fi
 
-          # 3. Fallback ke wget jika gdown gagal (misal direct usercontent link)
           if [ $(find . -type f | wc -l) -eq 0 ]; then
             echo "[LOG] Fallback ke wget..."
             sudo wget --content-disposition --show-progress --no-check-certificate "$FW_LINK" || true
@@ -95,7 +92,7 @@ jobs:
       run: |
         cd openwrt
         
-        echo "[LOG] Memulai proses dekompresi bertingkat..."
+        echo "[LOG] Memulai proses dekompresi bertingkat & deteksi firmware..."
 
         extract_file() {
           local file="$1"
@@ -106,14 +103,15 @@ jobs:
             *.tar.gz|*.tgz)  sudo tar -xzvf "$file" ;;
             *.gz|*.GZ)       sudo gunzip -f "$file" ;;
             *.xz|*.XZ)       sudo unxz -f "$file" ;;
+            *)               sudo 7z x "$file" -y 2>/dev/null || true ;;
           esac
         }
 
-        # Loop ekstraksi bertingkat jika file berada di dalam subfolder/arsip bersarang
-        for i in {1..3}; do
-          ARCHIVE=$(find . -maxdepth 2 -type f \( -iname "*.zip" -o -iname "*.rar" -o -iname "*.7z" -o -iname "*.tar.gz" \) | head -n 1)
+        # Loop ekstraksi bertingkat (tanpa limit maxdepth agar bisa menjangkau sub-folder dalam)
+        for i in {1..5}; do
+          ARCHIVE=$(find . -type f \( -iname "*.zip" -o -iname "*.rar" -o -iname "*.7z" -o -iname "*.tar.gz" \) | head -n 1)
           if [ -n "$ARCHIVE" ]; then
-            echo "[LOG] Mengekstrak arsip: $ARCHIVE"
+            echo "[LOG] Mengekstrak arsip terdeteksi: $ARCHIVE"
             extract_file "$ARCHIVE"
             sudo rm -f "$ARCHIVE"
           else
@@ -121,17 +119,17 @@ jobs:
           fi
         done
 
-        # Cari file .img dengan ukuran terbesar
-        TARGET_IMG=$(find . -type f -iname "*.img" -printf "%s %p\n" | sort -nr | head -n 1 | cut -d' ' -f2-)
+        # Cari file firmware utama (.img, .bin, atau .raw) dengan ukuran terbesar
+        TARGET_IMG=$(find . -type f \( -iname "*.img" -o -iname "*.bin" -o -iname "*.raw" \) -printf "%s %p\n" | sort -nr | head -n 1 | cut -d' ' -f2-)
 
         if [ -z "$TARGET_IMG" ]; then
-          echo "[ERROR] File .img tidak ditemukan!"
+          echo "[ERROR] File firmware (.img / .bin / .raw) tidak ditemukan!"
           echo "--- Isi direktori saat ini: ---"
           find . -type f
           exit 1
         fi
 
-        echo "[LOG] File IMG utama ditemukan: $TARGET_IMG"
+        echo "[LOG] File Firmware utama ditemukan: $TARGET_IMG"
 
         # Ubah nama file ke firmware.img untuk mencegah error spasi/karakter unik
         CLEAN_NAME="firmware.img"
@@ -144,7 +142,6 @@ jobs:
 
     - name: Extract & Mod SDCard Firmware
       run: |
-        # Validasi Keberadaan Variable IMG_NAME
         if [ -z "${{ env.IMG_NAME }}" ]; then
           echo "[ERROR] Variable env.IMG_NAME kosong! Proses dihentikan."
           exit 1
