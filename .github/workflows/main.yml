@@ -107,19 +107,20 @@ jobs:
           esac
         }
 
-        # Loop ekstraksi bertingkat (tanpa limit maxdepth agar bisa menjangkau sub-folder dalam)
+        # Loop ekstraksi bertingkat, ditambahkan .xz dan .gz
         for i in {1..5}; do
-          ARCHIVE=$(find . -type f \( -iname "*.zip" -o -iname "*.rar" -o -iname "*.7z" -o -iname "*.tar.gz" \) | head -n 1)
+          ARCHIVE=$(find . -type f \( -iname "*.zip" -o -iname "*.rar" -o -iname "*.7z" -o -iname "*.tar.gz" -o -iname "*.tgz" -o -iname "*.gz" -o -iname "*.xz" \) | head -n 1)
           if [ -n "$ARCHIVE" ]; then
             echo "[LOG] Mengekstrak arsip terdeteksi: $ARCHIVE"
             extract_file "$ARCHIVE"
-            sudo rm -f "$ARCHIVE"
+            sudo rm -f "$ARCHIVE" 2>/dev/null || true
           else
             break
           fi
         done
 
         # Cari file firmware utama (.img, .bin, atau .raw) dengan ukuran terbesar
+        # Menggunakan format -printf dan cut untuk mencegah error jika ada spasi pada nama file
         TARGET_IMG=$(find . -type f \( -iname "*.img" -o -iname "*.bin" -o -iname "*.raw" \) -printf "%s %p\n" | sort -nr | head -n 1 | cut -d' ' -f2-)
 
         if [ -z "$TARGET_IMG" ]; then
