@@ -92,33 +92,28 @@ jobs:
       run: |
         cd openwrt
         
-        echo "[LOG] Memulai proses dekompresi universal..."
+        echo "[LOG] Memulai proses dekompresi bertingkat..."
 
-        # Ekstraksi bertingkat pintar menggunakan 7z
+        # Loop ekstraksi bertingkat universal tanpa batas kedalaman folder
         for i in {1..5}; do
-          FOUND_ARCHIVE=0
-          while IFS= read -r -d '' file; do
-            [ -f "$file" ] || continue
-            echo "[LOG] Mengekstrak arsip: $file"
-            if sudo 7z x "$file" -y > /dev/null 2>&1; then
-              sudo rm -f "$file"
-              FOUND_ARCHIVE=1
-            fi
-          done < <(find . -type f \( -iname "*.zip" -o -iname "*.rar" -o -iname "*.7z" -o -iname "*.tar*" -o -iname "*.tgz" -o -iname "*.gz" -o -iname "*.xz" -o -iname "*.bz2" -o -iname "*.zst" \) -print0)
-
-          if [ $FOUND_ARCHIVE -eq 0 ]; then
+          ARCHIVE=$(find . -type f \( -iname "*.xz" -o -iname "*.gz" -o -iname "*.zip" -o -iname "*.rar" -o -iname "*.7z" -o -iname "*.tar*" -o -iname "*.tgz" -o -iname "*.bz2" -o -iname "*.zst" \) | head -n 1)
+          if [ -n "$ARCHIVE" ]; then
+            echo "[LOG] Mengekstrak arsip terdeteksi: $ARCHIVE"
+            sudo 7z x "$ARCHIVE" -y > /dev/null 2>&1 || true
+            sudo rm -f "$ARCHIVE" 2>/dev/null || true
+          else
             break
           fi
         done
 
         echo "[LOG] Memulai pendeteksian berkas firmware..."
 
-        # Prioritas 1: Cari berkas dengan ekstensi standar (.img, .bin, .raw)
+        # Prioritas 1: Cari ekstensi umum (.img, .bin, .raw)
         TARGET_FILE=$(find . -type f \( -iname "*.img" -o -iname "*.bin" -o -iname "*.raw" \) -printf "%s %p\n" | sort -nr | head -n 1 | cut -d' ' -f2-)
 
-        # Prioritas 2 (Pintar): Jika tidak ada ekstensi standar, ambil file TERBESAR (>50MB) apapun nama/ekstensinya
+        # Prioritas 2 (Fallback Pintar): Ambil file terbesar (>50MB) apapun ekstensinya (misal .A.Sop atau tanpa ekstensi)
         if [ -z "$TARGET_FILE" ]; then
-          echo "[LOG] Tidak ditemukan ekstensi standar. Memindai file terbesar (>50MB)..."
+          echo "[LOG] Ekstensi standar tidak ditemukan. Memindai file terbesar (>50MB)..."
           TARGET_FILE=$(find . -type f -size +50M -printf "%s %p\n" | sort -nr | head -n 1 | cut -d' ' -f2-)
         fi
 
@@ -131,11 +126,11 @@ jobs:
 
         echo "[LOG] File Firmware utama ditemukan: $TARGET_FILE"
 
-        # Format ulang nama file menjadi firmware.img agar aman diproses losetup
+        # Sanitisasi nama file ke firmware.img untuk menghindari masalah spasi/karakter khusus
         CLEAN_NAME="firmware.img"
         sudo mv "$TARGET_FILE" "./$CLEAN_NAME"
 
-        # Set variabel environment
+        # Simpan nama file ke environment variable
         echo "IMG_NAME=$CLEAN_NAME" >> $GITHUB_ENV
         echo "COMPRESSION=xz" >> $GITHUB_ENV
         echo "[LOG] Berhasil diset: IMG_NAME=$CLEAN_NAME"
@@ -172,7 +167,7 @@ jobs:
         # Cek partisi boot (p1)
         BOOT_PART="${device}p1"
         if [ ! -b "$BOOT_PART" ]; then
-          # Fallback menggunakan kpartx jika partprobe gagal membuat simlink
+          # Fallback menggunakan kpartx jika partprobe gagal membuat simlink partisi
           sudo kpartx -av "$device" 2>/dev/null || true
           loop_name=$(echo "$device" | cut -d'/' -f3)
           BOOT_PART="/dev/mapper/${loop_name}p1"
