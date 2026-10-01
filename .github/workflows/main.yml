@@ -33,7 +33,7 @@ jobs:
         PWD=$(pwd)
         sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc > /dev/null 2>&1
         sudo -E apt-get -qq update > /dev/null 2>&1
-        sudo -E apt-get -y install wget python3 p7zip-full unzip unrar tar gzip xz-utils > /dev/null 2>&1
+        sudo -E apt-get -y install wget python3 p7zip-full unzip unrar tar gzip xz-utils kpartx file > /dev/null 2>&1
         sudo -E apt-get -qq autoremove --purge > /dev/null 2>&1
         sudo -E apt-get -qq clean > /dev/null 2>&1
         sudo pip3 install --upgrade pip > /dev/null 2>&1
@@ -48,7 +48,7 @@ jobs:
         cd openwrt
         echo "[LOG] Mengunduh firmware dari: $FW_LINK"
         
-        # Ekstrak File ID Google Drive (Panjang ID standar 25+ karakter)
+        # Ekstrak File ID Google Drive jika ada
         GDRIVE_ID=$(echo "$FW_LINK" | grep -oP '(?<=/d/|id=)[a-zA-Z0-9_-]{25,}' | head -n 1)
 
         if echo "$FW_LINK" | grep -E -q "drive.google.com|drive.usercontent.google.com|docs.google.com" || [ -n "$GDRIVE_ID" ]; then
@@ -92,54 +92,53 @@ jobs:
       run: |
         cd openwrt
         
-        echo "[LOG] Memulai proses dekompresi bertingkat & deteksi firmware..."
+        echo "[LOG] Memulai proses dekompresi universal..."
 
-        extract_file() {
-          local file="$1"
-          case "$file" in
-            *.7z|*.7Z)       sudo 7z x "$file" -y ;;
-            *.zip|*.ZIP)     sudo unzip -o "$file" ;;
-            *.rar|*.RAR)     sudo unrar x -y "$file" ;;
-            *.tar.gz|*.tgz)  sudo tar -xzvf "$file" ;;
-            *.gz|*.GZ)       sudo gunzip -f "$file" ;;
-            *.xz|*.XZ)       sudo unxz -f "$file" ;;
-            *)               sudo 7z x "$file" -y 2>/dev/null || true ;;
-          esac
-        }
-
-        # Loop ekstraksi bertingkat, ditambahkan .xz dan .gz
+        # Ekstraksi bertingkat pintar menggunakan 7z
         for i in {1..5}; do
-          ARCHIVE=$(find . -type f \( -iname "*.zip" -o -iname "*.rar" -o -iname "*.7z" -o -iname "*.tar.gz" -o -iname "*.tgz" -o -iname "*.gz" -o -iname "*.xz" \) | head -n 1)
-          if [ -n "$ARCHIVE" ]; then
-            echo "[LOG] Mengekstrak arsip terdeteksi: $ARCHIVE"
-            extract_file "$ARCHIVE"
-            sudo rm -f "$ARCHIVE" 2>/dev/null || true
-          else
+          FOUND_ARCHIVE=0
+          while IFS= read -r -d '' file; do
+            [ -f "$file" ] || continue
+            echo "[LOG] Mengekstrak arsip: $file"
+            if sudo 7z x "$file" -y > /dev/null 2>&1; then
+              sudo rm -f "$file"
+              FOUND_ARCHIVE=1
+            fi
+          done < <(find . -type f \( -iname "*.zip" -o -iname "*.rar" -o -iname "*.7z" -o -iname "*.tar*" -o -iname "*.tgz" -o -iname "*.gz" -o -iname "*.xz" -o -iname "*.bz2" -o -iname "*.zst" \) -print0)
+
+          if [ $FOUND_ARCHIVE -eq 0 ]; then
             break
           fi
         done
 
-        # Cari file firmware utama (.img, .bin, atau .raw) dengan ukuran terbesar
-        # Menggunakan format -printf dan cut untuk mencegah error jika ada spasi pada nama file
-        TARGET_IMG=$(find . -type f \( -iname "*.img" -o -iname "*.bin" -o -iname "*.raw" \) -printf "%s %p\n" | sort -nr | head -n 1 | cut -d' ' -f2-)
+        echo "[LOG] Memulai pendeteksian berkas firmware..."
 
-        if [ -z "$TARGET_IMG" ]; then
-          echo "[ERROR] File firmware (.img / .bin / .raw) tidak ditemukan!"
+        # Prioritas 1: Cari berkas dengan ekstensi standar (.img, .bin, .raw)
+        TARGET_FILE=$(find . -type f \( -iname "*.img" -o -iname "*.bin" -o -iname "*.raw" \) -printf "%s %p\n" | sort -nr | head -n 1 | cut -d' ' -f2-)
+
+        # Prioritas 2 (Pintar): Jika tidak ada ekstensi standar, ambil file TERBESAR (>50MB) apapun nama/ekstensinya
+        if [ -z "$TARGET_FILE" ]; then
+          echo "[LOG] Tidak ditemukan ekstensi standar. Memindai file terbesar (>50MB)..."
+          TARGET_FILE=$(find . -type f -size +50M -printf "%s %p\n" | sort -nr | head -n 1 | cut -d' ' -f2-)
+        fi
+
+        if [ -z "$TARGET_FILE" ]; then
+          echo "[ERROR] File firmware tidak ditemukan setelah dekompresi!"
           echo "--- Isi direktori saat ini: ---"
           find . -type f
           exit 1
         fi
 
-        echo "[LOG] File Firmware utama ditemukan: $TARGET_IMG"
+        echo "[LOG] File Firmware utama ditemukan: $TARGET_FILE"
 
-        # Ubah nama file ke firmware.img untuk mencegah error spasi/karakter unik
+        # Format ulang nama file menjadi firmware.img agar aman diproses losetup
         CLEAN_NAME="firmware.img"
-        sudo mv "$TARGET_IMG" "./$CLEAN_NAME"
+        sudo mv "$TARGET_FILE" "./$CLEAN_NAME"
 
-        # Simpan ke Environment Variables
+        # Set variabel environment
         echo "IMG_NAME=$CLEAN_NAME" >> $GITHUB_ENV
         echo "COMPRESSION=xz" >> $GITHUB_ENV
-        echo "[LOG] Set IMG_NAME=$CLEAN_NAME"
+        echo "[LOG] Berhasil diset: IMG_NAME=$CLEAN_NAME"
 
     - name: Extract & Mod SDCard Firmware
       run: |
@@ -171,8 +170,17 @@ jobs:
         echo "[LOG] DTB Target: $dtb"
 
         # Cek partisi boot (p1)
-        if [ -b "${device}p1" ]; then
-          sudo mount ${device}p1 boot
+        BOOT_PART="${device}p1"
+        if [ ! -b "$BOOT_PART" ]; then
+          # Fallback menggunakan kpartx jika partprobe gagal membuat simlink
+          sudo kpartx -av "$device" 2>/dev/null || true
+          loop_name=$(echo "$device" | cut -d'/' -f3)
+          BOOT_PART="/dev/mapper/${loop_name}p1"
+        fi
+
+        if [ -b "$BOOT_PART" ]; then
+          echo "[LOG] Mounting partisi boot: $BOOT_PART"
+          sudo mount "$BOOT_PART" boot
           
           # Ekstrak berkas modifikasi jika ada
           if [ -f mod-boot-sdcard.tar.gz ]; then
@@ -212,7 +220,7 @@ jobs:
           sudo umount -l boot 2>/dev/null || true
           sleep 1
         else
-          echo "[WARNING] Partisi ${device}p1 tidak ditemukan pada image ini."
+          echo "[WARNING] Partisi boot tidak terdeteksi pada image ini."
         fi
         
         # Inject u-boot MBR untuk Bootcard/SDCard
@@ -222,6 +230,7 @@ jobs:
           sudo dd if=u-boot.bin of=${device} bs=512 skip=1 seek=1 conv=fsync 2>/dev/null
         fi
 
+        sudo kpartx -dv ${device} 2>/dev/null || true
         sudo losetup -d ${device} 2>/dev/null || true
         sleep 1
         
