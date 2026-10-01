@@ -48,13 +48,29 @@ jobs:
         cd openwrt
         echo "[LOG] Mengunduh firmware dari: $FW_LINK"
         
-        if echo "$FW_LINK" | grep -E -q "drive.google.com|docs.google.com"; then
+        # Ekstrak File ID Google Drive (Panjang ID standar 25+ karakter)
+        GDRIVE_ID=$(echo "$FW_LINK" | grep -oP '(?<=/d/|id=)[a-zA-Z0-9_-]{25,}' | head -n 1)
+
+        if echo "$FW_LINK" | grep -E -q "drive.google.com|drive.usercontent.google.com|docs.google.com" || [ -n "$GDRIVE_ID" ]; then
           echo "[LOG] Terdeteksi link Google Drive..."
-          sudo gdown --fuzzy "$FW_LINK" || {
-            echo "[LOG] gdown URL gagal, mencoba ekstraksi File ID..."
-            FILE_ID=$(echo "$FW_LINK" | grep -oP '(?<=/d/|id=)[a-zA-Z0-9_-]+' | head -n 1)
-            sudo gdown --id "$FILE_ID" --fuzzy
-          }
+          
+          # 1. Coba unduh menggunakan File ID jika ID terdeteksi
+          if [ -n "$GDRIVE_ID" ]; then
+            echo "[LOG] Mengunduh via Google Drive File ID: $GDRIVE_ID"
+            sudo gdown --id "$GDRIVE_ID" || true
+          fi
+          
+          # 2. Coba gdown --fuzzy jika folder masih kosong
+          if [ $(find . -type f | wc -l) -eq 0 ]; then
+            echo "[LOG] Mengunduh via gdown --fuzzy..."
+            sudo gdown --fuzzy "$FW_LINK" || true
+          fi
+
+          # 3. Fallback ke wget jika gdown gagal (misal direct usercontent link)
+          if [ $(find . -type f | wc -l) -eq 0 ]; then
+            echo "[LOG] Fallback ke wget..."
+            sudo wget --content-disposition --show-progress --no-check-certificate "$FW_LINK" || true
+          fi
         elif echo "$FW_LINK" | grep -q "mediafire.com"; then
           echo "[LOG] Terdeteksi link Mediafire..."
           sudo mediafire-dl "$FW_LINK"
@@ -62,12 +78,17 @@ jobs:
           echo "[LOG] Terdeteksi link Mega.nz..."
           sudo mega-get "$FW_LINK"
         else
-          echo "[LOG] Terdeteksi Direct Link..."
+          echo "[LOG] Terdeteksi Direct Link / URL Biasa..."
           sudo wget --content-disposition --show-progress --no-check-certificate "$FW_LINK"
         fi
         
-        echo "[LOG] Daftar berkas diunduh:"
+        echo "[LOG] Daftar berkas yang berhasil diunduh:"
         ls -lh
+
+        if [ $(find . -type f | wc -l) -eq 0 ]; then
+          echo "[ERROR] Gagal mengunduh file dari link yang diberikan!"
+          exit 1
+        fi
 
     - name: Decompress & Detect Firmware
       id: decompress
